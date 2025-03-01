@@ -12,6 +12,7 @@ import sys
 import torch
 from BlobManager import store_models, restore_models, ModelManager
 import uuid
+import requests
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -297,6 +298,34 @@ def save_environment_json(
         logger.error(f"Failed to save environment configuration: {str(e)}")
         raise
 
+def notify_deployment_service(environment_id: str) -> bool:
+    """
+    Notify the deployment service about a new environment.
+    
+    Args:
+        environment_id: UUID of the environment to deploy
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        url = "https://comfy-cloud-serverless.vercel.app/api/deploy-workflow"
+        payload = {"environmentId": environment_id}
+        
+        logger.info(f"Notifying deployment service for environment ID: {environment_id}")
+        response = requests.post(url, json=payload)
+        
+        if response.status_code == 200:
+            logger.info(f"Deployment service notified successfully: {response.text}")
+            return True
+        else:
+            logger.error(f"Failed to notify deployment service. Status code: {response.status_code}, Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error notifying deployment service: {str(e)}")
+        return False
+
 def create_comfy_state_archive(
     comfy_path: str,
     output_path: str = "comfy_state.zip",
@@ -539,6 +568,7 @@ if __name__ == "__main__":
     parser.add_argument("--size-threshold", type=float, default=10.0, help="Size threshold in MB for large files")
     parser.add_argument("--skip-comfy-install", action="store_true", help="Skip ComfyUI installation during restore")
     parser.add_argument("--environment-id", help="Environment ID to restore (UUID format)")
+    parser.add_argument("--notify-deployment", action="store_true", help="Notify deployment service after saving")
     
     args = parser.parse_args()
     comfy_path = args.comfy_path
@@ -589,6 +619,13 @@ if __name__ == "__main__":
                     logger.info(f"Uploaded comfy_state.zip to environments/{upload_uuid}/comfy_state.zip")
 
             logger.info(f"Environment snapshot saved with ID: {upload_uuid}")
+            
+            # Notify deployment service if requested
+            if args.notify_deployment:
+                if notify_deployment_service(upload_uuid):
+                    logger.info("Deployment service notified successfully")
+                else:
+                    logger.warning("Failed to notify deployment service")
             
         elif args.action == "restore":
             # Restore environment and large files
