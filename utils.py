@@ -538,6 +538,7 @@ if __name__ == "__main__":
     parser.add_argument("--state-file", default="comfy_state.zip", help="Path to comfy_state.zip file")
     parser.add_argument("--size-threshold", type=float, default=10.0, help="Size threshold in MB for large files")
     parser.add_argument("--skip-comfy-install", action="store_true", help="Skip ComfyUI installation during restore")
+    parser.add_argument("--environment-id", help="Environment ID to restore (UUID format)")
     
     args = parser.parse_args()
     comfy_path = args.comfy_path
@@ -606,6 +607,17 @@ if __name__ == "__main__":
                 else:
                     logger.warning("comfy_state.zip was not downloaded, will skip state restoration")
             
+            # Load environment.json
+            try:
+                with open(args.env_file, 'r') as f:
+                    environment_state = json.load(f)
+            except FileNotFoundError:
+                logger.error(f"Environment file not found: {args.env_file}")
+                sys.exit(1)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in environment file: {e}")
+                sys.exit(1)
+            
             # 1. Install ComfyUI if needed
             if not args.skip_comfy_install:
                 logger.info("Step 1: Setting up ComfyUI")
@@ -634,15 +646,8 @@ if __name__ == "__main__":
             cm_cli_path = Path(comfy_path) / "custom_nodes" / "ComfyUI-Manager" / "cm-cli.py"
             if cm_cli_path.exists():
                 try:
-                    # Install typer dependency first
-                    logger.info("Installing typer dependency for ComfyUI-Manager")
-                    subprocess.run(
-                        [sys.executable, "-m", "pip", "install", "typer", "rich"],
-                        check=True
-                    )
-                    
                     # Install ComfyUI Manager requirements before running cm-cli restore
-                    logger.info("Installing ComfyUI Manager requirements")
+                    logger.info("Installing ComfyUI-Manager requirements")
                     requirements_file = cm_cli_path.parent / "requirements.txt"
                     if requirements_file.exists():
                         subprocess.run(
@@ -650,7 +655,7 @@ if __name__ == "__main__":
                             check=True
                         )
                     else:
-                        logger.warning(f"ComfyUI Manager requirements.txt not found at {requirements_file}")
+                        logger.warning(f"ComfyUI-Manager requirements.txt not found at {requirements_file}")
                     
                     logger.info("Running ComfyUI-Manager dependency restoration")
                     subprocess.run(
@@ -663,6 +668,11 @@ if __name__ == "__main__":
                     logger.error(f"Failed to install custom node dependencies: {str(e)}")
             else:
                 logger.warning("ComfyUI-Manager not found, skipping dependency installation")
+            
+            # Clean up temporary files if we downloaded them
+            if args.environment_id and temp_dir.exists():
+                logger.info("Cleaning up temporary files")
+                shutil.rmtree(temp_dir)
             
             logger.info("Restore operation completed successfully")
             

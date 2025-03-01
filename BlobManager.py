@@ -30,10 +30,8 @@ class ModelManager:
     # ---------------------------------------------------
     def _check_remote_existence_via_sas(self, sas_url: str) -> bool:
         """
-        Option A: Head request to see if the blob is already there.
+        Check if a blob already exists using a HEAD request on the SAS URL.
         This requires 'read' permissions on the SAS URL.
-        If your Next.js route always grants "rw",
-        we *could* do a HEAD request on that same URL.
         """
         try:
             resp = requests.head(sas_url, timeout=10)
@@ -113,10 +111,7 @@ class ModelManager:
         """
         Upload the local file at source_path using a SAS URL from your Next.js endpoint.
         
-        :param source_path: The file path on disk.
-        :param hash_value: By default used as the 'prefix' in Azure. Also used for caching logic.
-        :param container_name: Name of the Azure container, default is 'custom-nodes-models'.
-        :param prefix: If set, overrides the default of using `hash_value` as the prefix in Azure's path.
+        Returns True if the file was uploaded, False if it failed, and 'skipped' if it was skipped.
         """
         try:
             used_prefix = prefix if prefix else hash_value
@@ -131,6 +126,11 @@ class ModelManager:
                 return False
 
             sas_url = sas_urls[0]
+
+            # Check if blob already exists
+            if self._check_remote_existence_via_sas(sas_url):
+                logger.info(f"Blob already exists for {file_name} at prefix {used_prefix}, skipping upload.")
+                return "skipped"
 
             # Confirm local file is valid
             if not source_path.exists():
@@ -206,29 +206,24 @@ class ModelManager:
         environment: Dict
     ) -> None:
         """
-        Example parallel store, updated to use the new _fetch_upload_sas_urls logic.
+        Store models from the environment, avoiding overwriting existing blobs.
         """
         success_count = 0
         error_count = 0
         skipped_count = 0
         total_size = 0
 
-        models = environment.get("custom_nodes_models", [])
+        models = environment.get("large_files", [])
         logger.info(f"Found {len(models)} models to store in environment.")
         # List of (Path, hash, size)
         to_upload = []
 
         for m in models:
-            source_path = Path(comfy_path) / "custom_nodes" / m["path"]
+            source_path = Path(comfy_path) / m["path"]
             if not source_path.exists():
                 logger.error(f"Model file not found: {source_path}")
                 error_count += 1
                 continue
-
-            # If you want to check caching via HEAD, you'd first get a read SAS and HEAD it
-            # (or use a separate route). Simplified approach below:
-            # ...
-            # skip if it exists
 
             to_upload.append((source_path, m["hash"], m["size"]))
 
@@ -241,9 +236,12 @@ class ModelManager:
             for future in as_completed(future_map):
                 p, h, sz = future_map[future]
                 try:
-                    if future.result():
+                    result = future.result()
+                    if result == True:
                         success_count += 1
                         total_size += sz
+                    elif result == "skipped":
+                        skipped_count += 1
                     else:
                         error_count += 1
                 except Exception as e:
@@ -394,7 +392,7 @@ def store_models(
                 else:
                     error_count += 1
             except Exception as e:
-                logger.error(f"Exception storing {p}: {str(e)}")
+                logger.error(f"Exception uploading {p}: {str(e)}")
                 error_count += 1
 
     logger.info(f"Files stored: {success_count}, Skipped: {skipped_count}, Failed: {error_count}")
@@ -447,4 +445,4 @@ def restore_models(
                 error_count += 1
 
     logger.info(f"Files restored: {success_count}, Skipped: {skipped_count}, Failed: {error_count}")
-    logger.info(f"Total size of restored files: {total_size/(1024*1024*1024):.2f}GB")
+    logger.info(f"Total size of restored files: {total_size / (1024*1024*1024):.2f}GB")
